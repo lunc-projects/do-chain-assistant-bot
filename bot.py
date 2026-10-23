@@ -455,11 +455,11 @@ async def post_init(app: Application):
             ("ask","Ask me anything"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         try:
-            from telegram import InputProfilePhotoStatic
+            from telegram import InputFile, InputProfilePhotoStatic
             _pf = pathlib.Path(__file__).with_name("bot-profile-512.png")
             if _pf.exists():
                 with open(_pf, "rb") as fh:
-                    await app.bot.set_my_profile_photo(photo=InputProfilePhotoStatic(photo=fh.read()))
+                    await app.bot.set_my_profile_photo(photo=InputProfilePhotoStatic(photo=InputFile(fh.read(), filename="logo.png")))
         except Exception as e:
             print(f"profile photo: {e}")
         print("DO Chain Assistant Bot: description + commands set")
