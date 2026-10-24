@@ -9,7 +9,7 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import store, ai_client, chain
+import store, ai_client, chain, budget
 from kb import kb_as_text, find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -52,6 +52,9 @@ Or just @mention me in the group, or DM me
 /links — official links only
 /safety — scam / seed phrase safety rules
 /learn <word> — plain-English glossary (e.g. /learn quorum)
+
+*Daily AI pot*
+200,000 tokens a day (the free-plan allowance). When the pot runs out, AI pauses with a "daily limit reached" note until midnight UTC — simple commands and basic summaries keep working.
 
 *Notifications (your choice, on/off)*
 /govalerts — proposal / voting notifications menu (new, ending soon, result)
@@ -132,7 +135,9 @@ async def on_tldr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     out = await ai_client.chat([
         {"role":"system","content":"Summarize the message in 2-3 short lines. No extra commentary."},
-        {"role":"user","content": msg.text}]) or msg.text[:400]
+        {"role":"user","content": msg.text}])
+    if not out:
+        out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else msg.text[:400]
     await update.message.reply_text(f"⚡ TL;DR: {out}")
 
 async def on_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -148,7 +153,7 @@ async def on_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         {"role":"system","content":"You are DO Chain Assistant Bot, a standalone AI assistant for DO Chain Telegram groups. Answer clearly and concisely. Do not invent contract addresses or prices. Knowledge base:\n" + kb_as_text()},
         {"role":"user","content": q}])
     if not out:
-        out = "AI isn't configured yet (no AI_API_KEY). The owner can add the key in Railway and I'll answer fully."
+        out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else "AI isn't configured yet (no AI_API_KEY). The owner can add the key in Railway and I'll answer fully."
     await send_long(update, out)
 
 
@@ -291,7 +296,9 @@ async def on_learn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     w = " ".join(ctx.args).lower()
     if w in GLOSSARY: await update.message.reply_text(f"📖 *{w}*: {GLOSSARY[w]}", parse_mode=ParseMode.MARKDOWN); return
     out = await ai_client.chat([{"role":"system","content":"Explain the crypto/DO Chain term in 2-3 plain lines for a beginner. No financial advice."},{"role":"user","content":w}])
-    await update.message.reply_text(out or "I don't have that one yet — try /learn quorum")
+    if not out:
+        out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else "I don't have that one yet — try /learn quorum"
+    await update.message.reply_text(out)
 
 # ================= GOV ALERTS (voting + proposals) =================
 def gov_keyboard(chat_id):
@@ -450,7 +457,9 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
             out = await ai_client.chat([
                 {"role":"system","content":"You are DO Chain Assistant Bot, a standalone AI assistant for DO Chain Telegram groups. Answer clearly and concisely. Knowledge base:\n" + kb_as_text()},
-                {"role":"user","content": q}]) or "AI isn't configured yet (no AI_API_KEY)."
+                {"role":"user","content": q}])
+            if not out:
+                out = ai_client.DAILY_LIMIT_NOTE if budget.exhausted() else "AI isn't configured yet (no AI_API_KEY)."
             await send_long(update, out)
         return
     # DM: any long text = summarize it
