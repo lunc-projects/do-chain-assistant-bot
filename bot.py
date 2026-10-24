@@ -6,7 +6,7 @@ Run: TELEGRAM_BOT_TOKEN=... AI_API_KEY=... python bot.py
 """
 import os, re, time, json, datetime, pathlib
 import httpx
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import store, ai_client, chain
@@ -29,6 +29,9 @@ HELP = """🤖 *DO Chain Assistant Bot*
 *Ask me*
 /ask <question> — ask me anything
 Or just @mention me in the group, or DM me
+
+*Games*
+/games — open DO Games (10 cookie games + regular leaderboard)
 
 *Live info*
 /price — DO price, market cap, volume
@@ -86,6 +89,16 @@ async def send_long(update, text):
 
 async def on_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP, parse_mode=ParseMode.MARKDOWN)
+
+GAMES_URL = "https://do-games-phi.vercel.app"
+
+async def on_games(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat is not None and chat.type == "private":
+        button = InlineKeyboardButton("🎮 Play DO Games", web_app=WebAppInfo(url=GAMES_URL))
+    else:
+        button = InlineKeyboardButton("🎮 Play DO Games", url=GAMES_URL)
+    await update.message.reply_text("*DO Games* — 10 cookie games with one regular leaderboard. Your best run in each game adds up. Weekly and all-time boards; bragging rights only.", reply_markup=InlineKeyboardMarkup([[button]]), parse_mode=ParseMode.MARKDOWN)
 
 async def on_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows, detailed = parse_summary_args(ctx.args, update.effective_chat.id)
@@ -452,7 +465,7 @@ async def post_init(app: Application):
         await app.bot.set_my_short_description("Summarizes hundreds of group messages into a quick summary + DO Chain assistant.")
         await app.bot.set_my_commands([
             ("summary","Summarize group messages"),("catchup","What you missed"),("tldr","Shrink a message (reply to it)"),
-            ("ask","Ask me anything"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
+            ("ask","Ask me anything"),("games","Play DO Games (10 games)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         try:
             from telegram import InputFile, InputProfilePhotoStatic
@@ -479,6 +492,7 @@ def main():
     app.add_handler(CommandHandler("catchup", on_catchup))
     app.add_handler(CommandHandler("tldr", on_tldr))
     app.add_handler(CommandHandler("ask", on_ask))
+    app.add_handler(CommandHandler("games", on_games))
     app.add_handler(CommandHandler("proposal", on_proposal))
     app.add_handler(CommandHandler("price", on_price2))
     app.add_handler(CommandHandler("stats", on_stats))
