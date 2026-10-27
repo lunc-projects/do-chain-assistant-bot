@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""DO Chain Assistant Bot — full AI assistant for Telegram groups.
-Core: summarize hundreds of messages into a quick summary.
-Also: /catchup, /tldr, /ask (general AI Q&A), DM summary. Standalone — DO Chain only, no other projects included.
-Run: TELEGRAM_BOT_TOKEN=... AI_API_KEY=... python bot.py
+"""DO Chain Assistant Bot — Telegram assistant for DO Chain groups (no AI).
+Core: summarize hundreds of messages into a quick basic summary.
+Also: /catchup, DM summary. Standalone — DO Chain only, no other projects included.
+Run: TELEGRAM_BOT_TOKEN=... python bot.py
 """
-import os, re, time, json, datetime, pathlib
+import os, re, time, json, datetime, pathlib, collections
 import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import store, ai_client, chain
-from kb import kb_as_text, find_kb_answer
+import store, chain
+from kb import find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0") or 0)
@@ -24,11 +24,9 @@ HELP = """🤖 *DO Chain Assistant Bot*
 /summary 24h / /summary today / /summary 1h
 /summary detailed — longer version
 /catchup — what you missed since your last /catchup
-/tldr — reply to a long message to shrink it
 
-*Ask me*
-/ask <question> — ask me anything
-Or just @mention me in the group, or DM me
+*Quick answers*
+@mention me in the group — I'll answer from the built-in DO Chain notes if I have it
 
 *Games*
 /games — open DO Games (10 cookie games + regular leaderboard)
@@ -87,6 +85,27 @@ async def send_long(update, text):
     for i in range(0, len(text), 3900):
         await update.message.reply_text(text[i:i+3900])
 
+def basic_summary(rows, detailed=False) -> str:
+    """Basic (non-AI) summary: stats, links, active users, recent samples."""
+    if not rows:
+        return "No messages logged yet. I can only summarize messages sent after I joined this group."
+    total = len(rows)
+    users = collections.Counter(r["user_name"] for r in rows)
+    links = []
+    for r in rows:
+        links += re.findall(r"https?://\S+", r["text"] or "")
+    links = list(dict.fromkeys(links))[:10]
+    top = ", ".join(f"{u} ({n})" for u, n in users.most_common(5))
+    lines = [f"⚡ TL;DR — {total} messages logged", f"👥 Most active: {top}"]
+    if links:
+        lines.append("🔗 Links mentioned:\n" + "\n".join(links))
+    lines.append("\n📌 Recent messages (condensed):")
+    sample = rows[-25:] if not detailed else rows[-60:]
+    for r in sample:
+        t = (r["text"] or "")[:180].replace("\n", " ")
+        if t: lines.append(f"• {r['user_name']}: {t}")
+    return "\n".join(lines)
+
 async def on_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP, parse_mode=ParseMode.MARKDOWN)
 
@@ -102,6 +121,7 @@ async def on_botstats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"People seen talking in those groups: {u['people_in_groups']}\n"
         f"People who've used me in DM (settings/catchup): {u['dm_users']}\n"
         f"Messages currently logged: {u['messages']}", parse_mode=ParseMode.MARKDOWN)
+
 
 GAMES_URL = "https://do-games-phi.vercel.app"
 
@@ -119,7 +139,7 @@ async def on_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No messages logged yet — I can only summarize messages sent after I joined this group. Give it some activity, then try /summary again.")
         return
     await update.message.reply_text(f"Summarizing {len(rows)} messages…")
-    out = await ai_client.summarize(rows, detailed=detailed)
+    out = basic_summary(rows, detailed=detailed)
     await send_long(update, out)
     store.set_catchup(update.effective_chat.id, update.effective_user.id)
 
@@ -134,36 +154,9 @@ async def on_catchup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not rows:
         await update.message.reply_text("You're all caught up — no new messages since your last /catchup.")
         return
-    out = await ai_client.summarize(rows)
+    out = basic_summary(rows)
     await send_long(update, f"📬 Catchup — {len(rows)} new messages\n\n{out}")
     store.set_catchup(cid, uid)
-
-async def on_tldr(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    msg = update.message.reply_to_message
-    if not msg or not msg.text:
-        await update.message.reply_text("Reply to a long message with /tldr and I'll shrink it.")
-        return
-    out = await ai_client.chat([
-        {"role":"system","content":"Summarize the message in 2-3 short lines. No extra commentary."},
-        {"role":"user","content": msg.text}]) or msg.text[:400]
-    await update.message.reply_text(f"⚡ TL;DR: {out}")
-
-async def on_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = " ".join(ctx.args).strip()
-    if not q:
-        await update.message.reply_text("Ask me something: /ask explain this proposal in simple words")
-        return
-    kb_hit = find_kb_answer(q)
-    if kb_hit:
-        await send_long(update, kb_hit)
-        return
-    out = await ai_client.chat([
-        {"role":"system","content":"You are DO Chain Assistant Bot, a standalone AI assistant for DO Chain Telegram groups. Answer clearly and concisely. Do not invent contract addresses or prices. Knowledge base:\n" + kb_as_text()},
-        {"role":"user","content": q}])
-    if not out:
-        out = "AI isn't configured yet (no AI_API_KEY). The owner can add the key in Railway and I'll answer fully."
-    await send_long(update, out)
-
 
 async def _can_change(update, ctx):
     chat = update.effective_chat
@@ -303,8 +296,7 @@ async def on_learn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /learn <word> — try: " + ", ".join(GLOSSARY.keys())); return
     w = " ".join(ctx.args).lower()
     if w in GLOSSARY: await update.message.reply_text(f"📖 *{w}*: {GLOSSARY[w]}", parse_mode=ParseMode.MARKDOWN); return
-    out = await ai_client.chat([{"role":"system","content":"Explain the crypto/DO Chain term in 2-3 plain lines for a beginner. No financial advice."},{"role":"user","content":w}])
-    await update.message.reply_text(out or "I don't have that one yet — try /learn quorum")
+    await update.message.reply_text("I don't have that one yet — try /learn quorum")
 
 # ================= GOV ALERTS (voting + proposals) =================
 def gov_keyboard(chat_id):
@@ -452,7 +444,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Log group messages for summaries
     if chat.type in ("group", "supergroup"):
         store.log_message(chat.id, user.id, name, text, update.message.message_id)
-    # Mention = ask
+    # Mention: built-in notes only, no AI
     bot_name = (await ctx.bot.get_me()).username
     if bot_name and f"@{bot_name}" in text:
         q = text.replace(f"@{bot_name}", "").strip()
@@ -461,24 +453,21 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if kb_hit:
                 await send_long(update, kb_hit)
                 return
-            out = await ai_client.chat([
-                {"role":"system","content":"You are DO Chain Assistant Bot, a standalone AI assistant for DO Chain Telegram groups. Answer clearly and concisely. Knowledge base:\n" + kb_as_text()},
-                {"role":"user","content": q}]) or "AI isn't configured yet (no AI_API_KEY)."
-            await send_long(update, out)
+            await update.message.reply_text("I don't answer questions with AI anymore — try /summary, /learn, or /links.")
         return
     # DM: any long text = summarize it
     if chat.type == "private" and len(text) > 600 and not text.startswith("/"):
         rows = [{"user_name": name, "text": text, "ts": int(time.time())}]
-        out = await ai_client.summarize(rows)
+        out = basic_summary(rows)
         await send_long(update, out)
 
 async def post_init(app: Application):
     try:
-        await app.bot.set_my_description("DO Chain Assistant Bot — I summarize busy group chats into a quick TL;DR and answer DO Chain questions. Use /summary, /catchup, /ask in a group, or DM me a long text to summarize.")
-        await app.bot.set_my_short_description("Summarizes hundreds of group messages into a quick summary + DO Chain assistant.")
+        await app.bot.set_my_description("DO Chain Assistant Bot — I summarize busy group chats into a quick summary. Use /summary, /catchup in a group, or DM me a long text to summarize.")
+        await app.bot.set_my_short_description("Summarizes hundreds of group messages into a quick summary.")
         await app.bot.set_my_commands([
-            ("summary","Summarize group messages"),("catchup","What you missed"),("tldr","Shrink a message (reply to it)"),
-            ("ask","Ask me anything"),("games","Play DO Games (10 games)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
+            ("summary","Summarize group messages"),("catchup","What you missed"),
+            ("games","Play DO Games (10 games)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         try:
             from telegram import InputFile, InputProfilePhotoStatic
@@ -501,11 +490,8 @@ def main():
     app = _builder.build()
     app.add_handler(CommandHandler("start", on_start))
     app.add_handler(CommandHandler("help", on_start))
-    app.add_handler(CommandHandler("botstats", on_botstats))
     app.add_handler(CommandHandler("summary", on_summary))
     app.add_handler(CommandHandler("catchup", on_catchup))
-    app.add_handler(CommandHandler("tldr", on_tldr))
-    app.add_handler(CommandHandler("ask", on_ask))
     app.add_handler(CommandHandler("games", on_games))
     app.add_handler(CommandHandler("proposal", on_proposal))
     app.add_handler(CommandHandler("price", on_price2))
@@ -525,6 +511,7 @@ def main():
     app.add_handler(CommandHandler("watchvalidator", on_watchvalidator))
     app.add_handler(CommandHandler("unwatchvalidator", on_unwatchvalidator))
     app.add_handler(CommandHandler("watchlist", on_watchlist))
+    app.add_handler(CommandHandler("botstats", on_botstats))
     app.add_handler(CommandHandler("settings", on_settings))
     app.add_handler(CallbackQueryHandler(on_gov_callback, pattern=r"^gov:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
