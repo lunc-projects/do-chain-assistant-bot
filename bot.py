@@ -85,26 +85,73 @@ async def send_long(update, text):
     for i in range(0, len(text), 3900):
         await update.message.reply_text(text[i:i+3900])
 
+# Summaries are compact digests, and they must never re-tag anyone:
+# a raw @handle in the output makes Telegram ping that person.
+SUMMARY_MAX_LINES = 10
+
+_MENTION_RE = re.compile(r"(^|[\s(\[{\"'])@([A-Za-z0-9_]{3,})", re.M)
+
+def strip_mentions(text: str) -> str:
+    """Remove the "@" from Telegram handles, leaving the bare name, so a
+    summary never re-tags (pings) the people it mentions. Only an @ at
+    the start of a token counts — start of the text or a line, after
+    whitespace, or after opening punctuation. An @ glued to a word
+    character (an email address, abc@def) is left untouched."""
+    return _MENTION_RE.sub(r"\1\2", text)
+
+def _plain_name(user_name: str) -> str:
+    """Logged names are stored as 'Full Name (@handle)'; summaries show
+    the plain display name only."""
+    plain = re.sub(r"\s*\(@[A-Za-z0-9_]+\)\s*$", "", user_name or "").strip()
+    return plain or (user_name or "")
+
 def basic_summary(rows, detailed=False) -> str:
-    """Basic (non-AI) summary: stats, links, active users, recent samples."""
+    """Basic (non-AI) summary: stats, links, active users, recent samples.
+    Compact by design: at most SUMMARY_MAX_LINES lines (whole lines are
+    dropped, never cut mid-line — oldest samples first, then the last
+    links), and author names are plain display names with no @handles."""
     if not rows:
         return "No messages logged yet. I can only summarize messages sent after I joined this group."
     total = len(rows)
-    users = collections.Counter(r["user_name"] for r in rows)
+    users = collections.Counter(_plain_name(r["user_name"]) for r in rows)
     links = []
     for r in rows:
         links += re.findall(r"https?://\S+", r["text"] or "")
     links = list(dict.fromkeys(links))[:10]
     top = ", ".join(f"{u} ({n})" for u, n in users.most_common(5))
-    lines = [f"⚡ TL;DR — {total} messages logged", f"👥 Most active: {top}"]
-    if links:
-        lines.append("🔗 Links mentioned:\n" + "\n".join(links))
-    lines.append("\n📌 Recent messages (condensed):")
     sample = rows[-25:] if not detailed else rows[-60:]
+    sample_lines = []
     for r in sample:
         t = (r["text"] or "")[:180].replace("\n", " ")
-        if t: lines.append(f"• {r['user_name']}: {t}")
-    return "\n".join(lines)
+        if t: sample_lines.append(f"• {_plain_name(r['user_name'])}: {t}")
+    parts = [("head", f"⚡ TL;DR — {total} messages logged"),
+             ("head", f"👥 Most active: {top}")]
+    if links:
+        parts.append(("linkhead", "🔗 Links mentioned:"))
+        parts += [("link", link) for link in links]
+    parts.append(("blank", ""))
+    parts.append(("samplehead", "📌 Recent messages (condensed):"))
+    parts += [("sample", s) for s in sample_lines]
+    while len(parts) > SUMMARY_MAX_LINES:
+        idx = next((i for i, (k, _) in enumerate(parts) if k == "sample"), None)
+        if idx is not None:
+            parts.pop(idx)
+            continue
+        idx = next((i for i in range(len(parts) - 1, -1, -1)
+                    if parts[i][0] == "link"), None)
+        if idx is not None:
+            parts.pop(idx)
+            continue
+        break
+    # A section header with nothing left under it goes too.
+    if not any(k == "sample" for k, _ in parts):
+        parts = [p for p in parts if p[0] not in ("blank", "samplehead")]
+    if not any(k == "link" for k, _ in parts):
+        parts = [p for p in parts if p[0] != "linkhead"]
+    # Quoted message text can carry @handles of its own — strip them here
+    # too, so the summary is tag-free by construction (the send paths
+    # sanitize again, which is harmless: strip_mentions is idempotent).
+    return strip_mentions("\n".join(t for _, t in parts))
 
 async def on_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP, parse_mode=ParseMode.MARKDOWN)
@@ -146,7 +193,7 @@ async def on_summary(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No messages logged yet — I can only summarize messages sent after I joined this group. Give it some activity, then try /summary again.")
         return
     await update.message.reply_text(f"Summarizing {len(rows)} messages…")
-    out = basic_summary(rows, detailed=detailed)
+    out = strip_mentions(basic_summary(rows, detailed=detailed))
     await send_long(update, out)
     store.set_catchup(update.effective_chat.id, update.effective_user.id)
 
@@ -162,7 +209,7 @@ async def on_catchup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You're all caught up — no new messages since your last /catchup.")
         return
     out = basic_summary(rows)
-    await send_long(update, f"📬 Catchup — {len(rows)} new messages\n\n{out}")
+    await send_long(update, strip_mentions(f"📬 Catchup — {len(rows)} new messages\n\n{out}"))
     store.set_catchup(cid, uid)
 
 async def _can_change(update, ctx):
@@ -465,7 +512,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # DM: any long text = summarize it
     if chat.type == "private" and len(text) > 600 and not text.startswith("/"):
         rows = [{"user_name": name, "text": text, "ts": int(time.time())}]
-        out = basic_summary(rows)
+        out = strip_mentions(basic_summary(rows))
         await send_long(update, out)
 
 async def post_init(app: Application):
