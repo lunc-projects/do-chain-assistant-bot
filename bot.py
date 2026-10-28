@@ -9,7 +9,7 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import store, chain
+import store, chain, stats_report
 from kb import find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -121,6 +121,13 @@ async def on_botstats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"People seen talking in those groups: {u['people_in_groups']}\n"
         f"People who've used me in DM (settings/catchup): {u['dm_users']}\n"
         f"Messages currently logged: {u['messages']}", parse_mode=ParseMode.MARKDOWN)
+
+
+async def job_stats_publish(ctx: ContextTypes.DEFAULT_TYPE):
+    """Publish this bot's counts to the shared stats DB every ~30 min
+    (silent no-op until UPSTASH_STATS_* is configured), where the LUNC
+    Assistant bot reads them for the combined daily report."""
+    await stats_report.publish()
 
 
 GAMES_URL = "https://do-games-phi.vercel.app"
@@ -518,6 +525,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_repeating(job_gov_check, interval=1800, first=180)
         app.job_queue.run_repeating(job_validator_check, interval=3600, first=240)
+        app.job_queue.run_repeating(job_stats_publish, interval=1800, first=200)  # publish counts for the combined daily report
     print("DO Chain Assistant Bot polling…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
