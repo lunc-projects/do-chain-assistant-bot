@@ -267,13 +267,26 @@ async def on_token(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args: await update.message.reply_text("Usage: /token udo — or /token udodx, an ibc/... denom, or a token contract address"); return
     await update.message.reply_text(await chain.token_text(ctx.args[0]), parse_mode=ParseMode.MARKDOWN)
 
+def _line_chunks(text, limit=3900):
+    """Split on line boundaries only — never inside a line, so a Markdown
+    address link can never be cut in half."""
+    chunks, cur = [], ""
+    for line in text.splitlines():
+        if cur and len(cur) + 1 + len(line) > limit:
+            chunks.append(cur); cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
+
 async def on_topholders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Cached snapshot only — the hourly job (job_topholders) does the chain work.
     # "Full list" is a callback (not a hosted page): the bot has no web host,
     # and the full list is DM'd privately to whoever taps the button.
     text = topholders.cached_text()
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Full list", callback_data="th:full")]])
-    chunks = [text[i:i+3900] for i in range(0, len(text), 3900)] or [text]
+    chunks = _line_chunks(text)
     for i, ch in enumerate(chunks):
         await update.message.reply_text(ch, parse_mode=ParseMode.MARKDOWN,
                                         reply_markup=kb if i == len(chunks) - 1 else None)
@@ -285,8 +298,8 @@ async def on_topholders_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     # the DM: answer with an alert telling them to start one first.
     text = topholders.cached_full_text()
     try:
-        for i in range(0, len(text), 3900):
-            await ctx.bot.send_message(q.from_user.id, text[i:i+3900], parse_mode=ParseMode.MARKDOWN)
+        for ch in _line_chunks(text):
+            await ctx.bot.send_message(q.from_user.id, ch, parse_mode=ParseMode.MARKDOWN)
     except Exception:
         await q.answer("📋 I couldn't DM you — open a private chat with me first (tap my name → Start), then tap 📋 Full list again.", show_alert=True)
         return

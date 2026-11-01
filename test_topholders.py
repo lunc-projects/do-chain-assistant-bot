@@ -65,8 +65,19 @@ dc_people = msg.split("DO Chain — native DO")[1].split("👥 *TOP 10 HOLDERS*"
 assert "do1bigwallet" in dc_people and "do1bonded" not in dc_people
 assert "do1bonded" in msg.split("🥩 *STAKING POOLS*")[-1]
 
+# --- compact rendering + last-4 clickable addresses -----------------------
+assert "\n\n" not in msg, "short message must be compact — no blank lines"
+assert "[et00](https://finder.terraclassic.community/mainnet/account/terra1wallet00)" in msg
+assert "[llet](https://do-chain.com/wallet/do1bigwallet)" in msg
+assert "`terra1wallet00`" not in msg and " terra1wallet00 " not in msg.replace("account/terra1wallet00)", "")
+for line in msg.splitlines():
+    if line[:2] in ("1.", "2.", "3."):
+        assert " · " in line and "DO · " in line, line
+
 # --- render_full(): everything + coverage --------------------------------
 full = topholders.render_full(CACHE)
+assert "\n\n" not in full, "full list must be compact — no blank lines"
+assert "[et00](https://finder.terraclassic.community/mainnet/account/terra1wallet00)" in full
 assert "test coverage note (terra)" in full and "test coverage note (dochain)" in full
 assert "terra1wallet10" in full and "terra1wallet11" in full, "full list goes past the top 10"
 assert "🏭 *OTHER CONTRACTS / CHAIN MODULES*" in full and "terra1mystery" in full and "do1module" in full
@@ -135,8 +146,14 @@ async def _dry():
     u = FakeUpdate()
     await bot.on_topholders(u, None)
     assert u.message.replies, "handler must reply"
-    text, kw = u.message.replies[-1]
+    text = "\n".join(t for t, _ in u.message.replies)
     assert "🏆" in text and "👥 *TOP 10 HOLDERS*" in text
+    # no chunk may cut a Markdown link in half: every https:// URL sits
+    # inside a complete [..](..) link in the same chunk
+    import re as _re
+    for t, _ in u.message.replies:
+        assert len(_re.findall(r"\[[^\]]+\]\(https://[^)]+\)", t)) == t.count("https://"), "a chunk split a link"
+    _, kw = u.message.replies[-1]
     markup = kw.get("reply_markup")
     assert markup is not None, "the Full list button must be attached"
     btn = markup.inline_keyboard[0][0]

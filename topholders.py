@@ -64,62 +64,78 @@ def _save_cache(cache):
 def _amt_pct(raw, supply):
     return int(raw) / 10**DEC, (int(raw) / int(supply) * 100 if int(supply) else 0)
 
-def _section(entries, kinds, supply, limit=None, numbered_from=1):
+def _explorer_url(chain_key, addr):
+    if chain_key == "terra_classic":
+        return f"https://finder.terraclassic.community/mainnet/account/{addr}"
+    return f"https://do-chain.com/wallet/{addr}"
+
+def _addr_link(chain_key, addr):
+    """Display = ONLY the last 4 characters, tappable to the full explorer page."""
+    return f"[{addr[-4:]}]({_explorer_url(chain_key, addr)})"
+
+def _short_label(label):
+    """Compact label: any full address inside it shrinks to its last 4."""
+    if not label:
+        return ""
+    import re
+    return re.sub(r"(?:terra1|do1)[a-z0-9]{20,}", lambda m: "…" + m.group(0)[-4:], label)
+
+def _section(chain_key, entries, kinds, supply, limit=None, numbered_from=1):
     rows = [e for e in entries if e["kind"] in kinds]
     if limit:
         rows = rows[:limit]
     out = []
     for i, e in enumerate(rows, numbered_from):
         amt, pct = _amt_pct(e["balance_raw"], supply)
-        lbl = f" — {e['label']}" if e.get("label") else ""
-        out.append(f"{i}. `{e['address']}`\n    {amt:,.2f} DO ({pct:.2f}%){lbl}")
+        lbl = f" · {_short_label(e['label'])}" if e.get("label") else ""
+        out.append(f"{i}. {_addr_link(chain_key, e['address'])} · {amt:,.0f} DO · {pct:.2f}%{lbl}")
     return out
 
 def render(cache):
     """The /topholders message: top-10 people + pools + staking, per chain."""
     if not cache:
         return "Top holders snapshot isn't ready yet — try again in a bit."
-    lines = ["🏆 *Top DO holders*"]
+    lines = ["🏆 *Top DO holders* — tap an address (last 4) for its explorer page"]
     for key, title in (("terra_classic", "Luna Classic — DO token (CW20)"),
                        ("do_chain", "DO Chain — native DO (udo)")):
         c = cache.get(key)
         if not c:
             continue
-        lines.append(f"\n*{title}*\n_as of {c['as_of']}_")
-        lines.append("\n👥 *TOP 10 HOLDERS* (wallets only)")
-        lines += _section(c["classified"], ("wallet",), c["supply_raw"], limit=10) or ["    (none in snapshot)"]
-        liq = _section(c["classified"], ("liquidity",), c["supply_raw"])
+        lines.append(f"*{title}* · _as of {c['as_of']}_")
+        lines.append("👥 *TOP 10 HOLDERS* (wallets only)")
+        lines += _section(key, c["classified"], ("wallet",), c["supply_raw"], limit=10) or ["(none in snapshot)"]
+        liq = _section(key, c["classified"], ("liquidity",), c["supply_raw"])
         if liq:
-            lines.append("\n💧 *LIQUIDITY POOLS* (locked in pair contracts)")
+            lines.append("💧 *LIQUIDITY POOLS* (locked in pair contracts)")
             lines += liq
-        stk = _section(c["classified"], ("staking",), c["supply_raw"])
+        stk = _section(key, c["classified"], ("staking",), c["supply_raw"])
         if stk:
-            lines.append("\n🥩 *STAKING POOLS* (locked in staking contracts)")
+            lines.append("🥩 *STAKING POOLS* (locked in staking contracts)")
             lines += stk
-    lines.append("\nContracts are listed separately — their DO is locked in code, not a person's wallet. Tap 📋 Full list for the complete picture.")
+    lines.append("Contracts sit separately — locked in code, not a person's wallet. 📋 Full list = DM'd to you only.")
     return "\n".join(lines)
 
 def render_full(cache):
     """The 📋 Full list follow-up: top-50 wallets + every contract section + coverage."""
     if not cache:
         return "Top holders snapshot isn't ready yet — try again in a bit."
-    lines = ["📋 *Full DO holders list*"]
+    lines = ["📋 *Full DO holders list* — tap an address (last 4) for its explorer page"]
     for key, title in (("terra_classic", "Luna Classic — DO token (CW20)"),
                        ("do_chain", "DO Chain — native DO (udo)")):
         c = cache.get(key)
         if not c:
             continue
-        lines.append(f"\n*{title}*\n_as of {c['as_of']}_\n_{c['coverage']}_")
-        lines.append("\n👥 *TOP 50 HOLDERS* (wallets only)")
-        lines += _section(c["classified"], ("wallet",), c["supply_raw"], limit=50) or ["    (none in snapshot)"]
-        for kinds, head in ((("liquidity",), "\n💧 *LIQUIDITY POOLS*"),
-                            (("staking",), "\n🥩 *STAKING POOLS*"),
-                            (("contract", "module"), "\n🏭 *OTHER CONTRACTS / CHAIN MODULES* (unidentified — not counted as holders)")):
-            rows = _section(c["classified"], kinds, c["supply_raw"])
+        lines.append(f"*{title}* · _as of {c['as_of']}_ · _{c['coverage']}_")
+        lines.append("👥 *TOP 50 HOLDERS* (wallets only)")
+        lines += _section(key, c["classified"], ("wallet",), c["supply_raw"], limit=50) or ["(none in snapshot)"]
+        for kinds, head in ((("liquidity",), "💧 *LIQUIDITY POOLS*"),
+                            (("staking",), "🥩 *STAKING POOLS*"),
+                            (("contract", "module"), "🏭 *OTHER CONTRACTS / CHAIN MODULES* (unidentified — not counted as holders)")):
+            rows = _section(key, c["classified"], kinds, c["supply_raw"])
             if rows:
                 lines.append(head)
                 lines += rows
-    lines.append("\nOn-chain data only — a big balance is not proof of who owns a wallet. DYOR.")
+    lines.append("On-chain data only — a big balance is not proof of who owns a wallet. DYOR.")
     return "\n".join(lines)
 
 def cached_text():
