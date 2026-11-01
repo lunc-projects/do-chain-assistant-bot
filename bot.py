@@ -9,7 +9,7 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import store, chain, stats_report
+import store, chain, stats_report, topholders
 from kb import find_kb_answer
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -39,6 +39,7 @@ HELP = """🤖 *DO Chain Assistant Bot*
 /proposal <id> — proposal detail + live tally
 /wallet do1... — public wallet balance + staking
 /token <denom or contract> — token info (e.g. /token udo, /token udodx)
+/topholders — top 25 DO holders on Luna Classic + DO Chain (snapshot, refreshed hourly)
 /validators — top 10 validators by voting power
 /validator <name or dovaloper1...> — validator detail
 
@@ -265,6 +266,33 @@ async def on_wallet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_token(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args: await update.message.reply_text("Usage: /token udo — or /token udodx, an ibc/... denom, or a token contract address"); return
     await update.message.reply_text(await chain.token_text(ctx.args[0]), parse_mode=ParseMode.MARKDOWN)
+
+async def on_topholders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Cached snapshot only — the hourly job (job_topholders) does the chain work.
+    # "Full list" is a callback (not a hosted page): the bot has no web host,
+    # and the follow-up message keeps everything inside Telegram.
+    text = topholders.cached_text()
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Full list", callback_data="th:full")]])
+    chunks = [text[i:i+3900] for i in range(0, len(text), 3900)] or [text]
+    for i, ch in enumerate(chunks):
+        await update.message.reply_text(ch, parse_mode=ParseMode.MARKDOWN,
+                                        reply_markup=kb if i == len(chunks) - 1 else None)
+
+async def on_topholders_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    text = topholders.cached_full_text()
+    for i in range(0, len(text), 3900):
+        await ctx.bot.send_message(q.message.chat.id, text[i:i+3900], parse_mode=ParseMode.MARKDOWN)
+
+async def job_topholders(ctx: ContextTypes.DEFAULT_TYPE):
+    """Hourly: advance the top-holders snapshot (Terra Classic incremental
+    FCD walk + DO Chain full account enumeration). Failures keep the old
+    snapshot — the command never blocks on chain calls."""
+    try:
+        await topholders.refresh()
+    except Exception as e:
+        print(f"topholders job: {e}")
 
 async def on_validators(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
@@ -521,7 +549,7 @@ async def post_init(app: Application):
         await app.bot.set_my_short_description("Summarizes hundreds of group messages into a quick summary.")
         await app.bot.set_my_commands([
             ("summary","Summarize group messages"),("catchup","What you missed"),
-            ("games","Play DO Games (10 games)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
+            ("games","Play DO Games (10 games)"),("proposals","Proposals voting now"),("proposal","Proposal + tally"),("price","DO price"),("stats","Chain stats"),("convert","Convert DO <-> USD"),("govalerts","Proposal alerts on/off"),("wallet","Public wallet lookup"),("token","Token info"),("topholders","Top DO holders (both chains)"),("validators","Top validators"),("watchvalidator","Watch a validator"),("help","All commands")])
         # Profile photo (owner's logo) — re-applied on boot so redeploys never lose it
         try:
             from telegram import InputFile, InputProfilePhotoStatic
@@ -554,6 +582,7 @@ def main():
     app.add_handler(CommandHandler("proposals", on_proposals))
     app.add_handler(CommandHandler("wallet", on_wallet))
     app.add_handler(CommandHandler("token", on_token))
+    app.add_handler(CommandHandler("topholders", on_topholders))
     app.add_handler(CommandHandler("validators", on_validators))
     app.add_handler(CommandHandler("validator", on_validator_info))
     app.add_handler(CommandHandler("stake", on_stake))
@@ -568,11 +597,13 @@ def main():
     app.add_handler(CommandHandler("botstats", on_botstats))
     app.add_handler(CommandHandler("settings", on_settings))
     app.add_handler(CallbackQueryHandler(on_gov_callback, pattern=r"^gov:"))
+    app.add_handler(CallbackQueryHandler(on_topholders_callback, pattern=r"^th:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     if app.job_queue:
         app.job_queue.run_repeating(job_gov_check, interval=1800, first=180)
         app.job_queue.run_repeating(job_validator_check, interval=3600, first=240)
         app.job_queue.run_repeating(job_stats_publish, interval=1800, first=200)  # publish counts for the combined daily report
+        app.job_queue.run_repeating(job_topholders, interval=3600, first=300)  # hourly top-holders snapshot refresh
     print("DO Chain Assistant Bot polling…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

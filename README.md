@@ -7,7 +7,7 @@ Forked from the LUNC Assistant Bot (2026-10-23) and re-pointed at DO Chain only 
 **Username:** owner picks in BotFather (must end in `bot`)
 
 ## Commands
-/summary, /summary 300, /summary 24h, /summary detailed, /catchup, /tldr (reply), /ask, /proposals, /proposal <id>, /price, /stats, /convert, /wallet do1..., /token <denom|contract>, /validators, /validator, /stake, /calc, /links, /safety, /learn, /govalerts, /watchvalidator, /watchlist, /settings, /help
+/summary, /summary 300, /summary 24h, /summary detailed, /catchup, /tldr (reply), /ask, /proposals, /proposal <id>, /price, /stats, /convert, /wallet do1..., /token <denom|contract>, /topholders, /validators, /validator, /stake, /calc, /links, /safety, /learn, /govalerts, /watchvalidator, /watchlist, /settings, /help
 DM the bot with a long pasted/forwarded text = instant summary.
 Built-in knowledge base answers DO Chain questions (what DO/DODx are, governance rules, staking, wallets, DEX, IBC bridging — honest risks included).
 
