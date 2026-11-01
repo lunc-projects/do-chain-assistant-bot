@@ -280,16 +280,42 @@ def _line_chunks(text, limit=3900):
         chunks.append(cur)
     return chunks or [text]
 
+async def job_delete_messages(ctx: ContextTypes.DEFAULT_TYPE):
+    """Auto-delete job: removes the listed messages (group tidy-up)."""
+    d = ctx.job.data or {}
+    for mid in d.get("message_ids", []):
+        try:
+            await ctx.bot.delete_message(d["chat_id"], mid)
+        except Exception:
+            pass  # already gone, or the bot lacks delete rights — never crash
+
 async def on_topholders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Cached snapshot only — the hourly job (job_topholders) does the chain work.
     # "Full list" is a callback (not a hosted page): the bot has no web host,
     # and the full list is DM'd privately to whoever taps the button.
+    # In groups the post (and the /topholders command itself) auto-deletes
+    # after 5 minutes so it never clutters the chat; in DM it stays.
+    chat = getattr(update, "effective_chat", None) or getattr(update.message, "chat", None)
+    in_group = getattr(chat, "type", None) in ("group", "supergroup")
     text = topholders.cached_text()
+    if in_group:
+        text += "\n🗑 Auto-deletes in 5 min"
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Full list", callback_data="th:full")]])
     chunks = _line_chunks(text)
+    sent_ids = []
     for i, ch in enumerate(chunks):
-        await update.message.reply_text(ch, parse_mode=ParseMode.MARKDOWN,
-                                        reply_markup=kb if i == len(chunks) - 1 else None)
+        sent = await update.message.reply_text(ch, parse_mode=ParseMode.MARKDOWN,
+                                               reply_markup=kb if i == len(chunks) - 1 else None)
+        if getattr(sent, "message_id", None):
+            sent_ids.append(sent.message_id)
+    if in_group and ctx is not None and getattr(ctx, "job_queue", None):
+        ids = list(sent_ids)
+        if getattr(update.message, "message_id", None):
+            ids.append(update.message.message_id)
+        if ids:
+            ctx.job_queue.run_once(job_delete_messages, when=300,
+                                   data={"chat_id": chat.id, "message_ids": ids},
+                                   name=f"thdel-{chat.id}-{ids[0]}")
 
 async def on_topholders_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query

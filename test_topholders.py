@@ -175,6 +175,50 @@ async def _dry():
     assert u3.callback_query.answers and u3.callback_query.answers[0][1] is True
     assert "private chat" in (u3.callback_query.answers[0][0] or "")
 
+# --- group auto-delete after 5 minutes --------------------------------------
+class FakeGroupMessage:
+    def __init__(self):
+        self.replies = []
+        self.chat = type("C", (), {"id": -555, "type": "supergroup"})()
+        self.message_id = 900
+        self._next = 901
+    async def reply_text(self, text, **kw):
+        self.replies.append((text, kw))
+        m = type("M", (), {"message_id": self._next})()
+        self._next += 1
+        return m
+
+class FakeJobQueue:
+    def __init__(self):
+        self.jobs = []
+    def run_once(self, cb, when=None, data=None, name=None, **kw):
+        self.jobs.append((cb, when, data, name))
+
+async def _dry_group():
+    u = FakeUpdate()
+    u.message = FakeGroupMessage()
+    u.effective_chat = u.message.chat
+    jq = FakeJobQueue()
+    ctx = type("Ctx", (), {"job_queue": jq, "bot": FakeBot()})()
+    await bot.on_topholders(u, ctx)
+    assert any("Auto-deletes in 5 min" in t for t, _ in u.message.replies)
+    assert len(jq.jobs) == 1, jq.jobs
+    cb, when, data, name = jq.jobs[0]
+    assert when == 300 and data["chat_id"] == -555
+    assert 900 in data["message_ids"] and len(data["message_ids"]) >= 2
+    # the delete job itself swallows failures and deletes what's listed
+    deleted = []
+    class DelBot:
+        async def delete_message(self, chat_id, mid):
+            deleted.append((chat_id, mid))
+            if mid == 900:
+                raise Exception("message can't be deleted")
+    job_ctx = type("J", (), {"job": type("Job", (), {"data": data})(), "bot": DelBot()})()
+    await bot.job_delete_messages(job_ctx)
+    assert deleted and deleted[0][0] == -555
+
+asyncio.run(_dry_group())
+
 asyncio.run(_dry())
 assert "topholders" in bot.HELP and "/topholders" in bot.HELP
 print("test_topholders: ALL PASS")
