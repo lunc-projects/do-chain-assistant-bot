@@ -120,9 +120,16 @@ class FakeBot:
 
 class FakeQuery:
     def __init__(self):
-        self.message = type("M", (), {"chat": type("C", (), {"id": 42})()})()
-    async def answer(self):
-        pass
+        # Group chat id is -100999; the clicker's user id is 777.
+        self.message = type("M", (), {"chat": type("C", (), {"id": -100999})()})()
+        self.from_user = type("U", (), {"id": 777})()
+        self.answers = []
+    async def answer(self, text=None, show_alert=False, **kw):
+        self.answers.append((text, show_alert))
+
+class FailBot:
+    async def send_message(self, chat_id, text, **kw):
+        raise Exception("Forbidden: bot can't initiate conversation with a user")
 
 async def _dry():
     u = FakeUpdate()
@@ -134,13 +141,22 @@ async def _dry():
     assert markup is not None, "the Full list button must be attached"
     btn = markup.inline_keyboard[0][0]
     assert btn.text == "📋 Full list" and btn.callback_data == "th:full"
-    # callback path sends the full list as follow-up message(s)
+    # callback path DMs the full list to the CLICKER only — never the group
     u2 = FakeUpdate()
     u2.callback_query = FakeQuery()
     ctx = type("Ctx", (), {"bot": FakeBot()})()
     await bot.on_topholders_callback(u2, ctx)
-    assert ctx.bot.sent and ctx.bot.sent[0][0] == 42
+    assert ctx.bot.sent and all(cid == 777 for cid, _ in ctx.bot.sent), ctx.bot.sent
+    assert all(cid != -100999 for cid, _ in ctx.bot.sent), "full list must never go to the group"
     assert "Full DO holders list" in "".join(t for _, t in ctx.bot.sent)
+    assert u2.callback_query.answers, "callback must be answered so the button settles"
+    # DM blocked (user never started a private chat): alert, no message sent
+    u3 = FakeUpdate()
+    u3.callback_query = FakeQuery()
+    ctx3 = type("Ctx", (), {"bot": FailBot()})()
+    await bot.on_topholders_callback(u3, ctx3)
+    assert u3.callback_query.answers and u3.callback_query.answers[0][1] is True
+    assert "private chat" in (u3.callback_query.answers[0][0] or "")
 
 asyncio.run(_dry())
 assert "topholders" in bot.HELP and "/topholders" in bot.HELP

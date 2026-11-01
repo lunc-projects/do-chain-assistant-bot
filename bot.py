@@ -270,7 +270,7 @@ async def on_token(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_topholders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Cached snapshot only — the hourly job (job_topholders) does the chain work.
     # "Full list" is a callback (not a hosted page): the bot has no web host,
-    # and the follow-up message keeps everything inside Telegram.
+    # and the full list is DM'd privately to whoever taps the button.
     text = topholders.cached_text()
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Full list", callback_data="th:full")]])
     chunks = [text[i:i+3900] for i in range(0, len(text), 3900)] or [text]
@@ -280,10 +280,17 @@ async def on_topholders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def on_topholders_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    # Full list goes ONLY to the clicker's private DM — never to the group.
+    # If they've never opened a private chat with the bot, Telegram blocks
+    # the DM: answer with an alert telling them to start one first.
     text = topholders.cached_full_text()
-    for i in range(0, len(text), 3900):
-        await ctx.bot.send_message(q.message.chat.id, text[i:i+3900], parse_mode=ParseMode.MARKDOWN)
+    try:
+        for i in range(0, len(text), 3900):
+            await ctx.bot.send_message(q.from_user.id, text[i:i+3900], parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        await q.answer("📋 I couldn't DM you — open a private chat with me first (tap my name → Start), then tap 📋 Full list again.", show_alert=True)
+        return
+    await q.answer("📋 Full list sent to your DM")
 
 async def job_topholders(ctx: ContextTypes.DEFAULT_TYPE):
     """Hourly: advance the top-holders snapshot (Terra Classic incremental
